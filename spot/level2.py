@@ -15,8 +15,9 @@ class L2Interface(ABC):
     def projection_type(self):
         raise NotImplementedError()
 
-    def __init__(self, h5_file):
+    def __init__(self, h5_file, product_id):
         self.h5_file = h5_file
+        self.product_id = product_id
 
         geo_data_grp_attrs = self.h5_file['Geometry_data'].attrs
         self.geo_n_pix = geo_data_grp_attrs['Number_of_pixels'][0]
@@ -57,6 +58,9 @@ class L2Interface(ABC):
     def get_geometry_data_list(self):
         raise NotImplementedError()
 
+    def get_product_list(self):
+        return list(self.h5_file['/Image_data'].keys())
+
 # =============================
 # Level-2 map-projection class
 # =============================
@@ -65,8 +69,8 @@ class L2Interface(ABC):
 class Tile(L2Interface):
     projection_type = 'Tile'
 
-    def __init__(self, h5_file):
-        super().__init__(h5_file)
+    def __init__(self, h5_file, product_id):
+        super().__init__(h5_file, product_id)
         tile_numbner = h5_file['/Global_attributes'].attrs['Tile_number'][0].decode('UTF-8')
         self.vtile = int(tile_numbner[0:2])
         self.htile = int(tile_numbner[2:])
@@ -98,8 +102,8 @@ class Tile(L2Interface):
 class Scene(L2Interface):
     projection_type = 'Scene'
 
-    def __init__(self, h5_file):
-        super().__init__(h5_file)
+    def __init__(self, h5_file, product_id):
+        super().__init__(h5_file, product_id)
         self.scene_number = h5_file['/Global_attributes'].attrs['Scene_number'][0]
         self.path_number = h5_file['/Global_attributes'].attrs['RSP_path_number'][0]
 
@@ -168,6 +172,12 @@ class OceanL2(Scene):
 
         return data
 
+    def get_product_list(self):
+        prod_list = super().get_product_list()
+        if self.product_id == 'NWLR':
+            prod_list = prod_list + ['Rrs_380', 'Rrs_412', 'Rrs_443', 'Rrs_490', 'Rrs_530', 'Rrs_565', 'Rrs_670']
+
+        return prod_list
 
 class LandL2(Tile):
 

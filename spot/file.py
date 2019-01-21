@@ -51,13 +51,13 @@ class File:
         self.product_id = os.path.splitext(self.filename)[0][-10:-6]
         logging.debug(' * Product: {0}'.format(self.product_id))
         if self.product_id == 'NWLR' or self.product_id == 'IWPR':
-            self._reader = OceanL2(self.h5_file)
+            self._reader = OceanL2(self.h5_file, self.product_id)
         elif self.product_id == 'SIPR':
-            self._reader = CryosphereL2(self.h5_file)
+            self._reader = CryosphereL2(self.h5_file, self.product_id)
         elif self.product_id == 'LAI_':
-            self._reader = LandL2(self.h5_file)
+            self._reader = LandL2(self.h5_file, self.product_id)
         elif self.product_id == 'ARNP':
-            self._reader = AtmosphereL2(self.h5_file)
+            self._reader = AtmosphereL2(self.h5_file, self.product_id)
         else:
             warnings.warn('{0} is not yet supported!'.format(self.product_id), SpotWarnings, stacklevel=2)
             raise NotSupportedError('{0} is not yet supported!'.format(self.product_id))
@@ -192,11 +192,12 @@ class File:
         return req_data
 
     def get_product_list(self):
-        ret = list(self.h5_file['/Image_data'].keys())
-        if self.product_id == 'NWLR':
-            ret = ret + ['Rrs_380', 'Rrs_412', 'Rrs_443', 'Rrs_490', 'Rrs_530', 'Rrs_565', 'Rrs_670']
-
-        return ret
+        # ret = list(self.h5_file['/Image_data'].keys())
+        # if self.product_id == 'NWLR':
+        #     ret = ret + ['Rrs_380', 'Rrs_412', 'Rrs_443', 'Rrs_490', 'Rrs_530', 'Rrs_565', 'Rrs_670']
+        #
+        # return ret
+        return self._reader.get_product_list()
 
     def get_geometry_data_list(self):
         return self._reader.get_geometry_data_list()
@@ -204,7 +205,7 @@ class File:
     # -----------------------
     # Search methods
     # -----------------------
-    def seatch_pos_from_latlon(self, tgt_lat:float, tgt_lon:float):
+    def search_pos_from_latlon(self, tgt_lat:float, tgt_lon:float):
         lat_data = self.get_geometry_data('Latitude')
         lon_data = self.get_geometry_data('Longitude')
 
