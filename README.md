@@ -35,7 +35,7 @@ Installation on the current version provides manually only.
 
 1. Download  
     * Git: `$ git clone git@github.com:K0gata/SGLI_Python_Opne_Tool.git`  
-    * Web: [Download (zip file)](https://github.com/K0gata/SGLI_Python_Open_Tool/archive/master.zipp)
+    * Web: [Download (zip file)](https://github.com/K0gata/SGLI_Python_Open_Tool/archive/master.zip)
 2. Import the SPOT module on your script
 
 ```python
