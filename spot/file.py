@@ -6,8 +6,10 @@ import warnings
 import datetime
 import time
 
-from spot.config import SpotWarnings, TZ_UTC0
-from spot.level2 import OceanL2, LandL2, AtmosphereL2, CryosphereL2, CryosphereOkhotskL2
+from spot.config import SpotWarnings, TZ_UTC0, PROJ_TYPE
+from spot.level1 import VNRL1B, IRSL1B
+from spot.level2 import OceanL2, LandL2, AtmosphereL2, CryosphereL2, CryosphereOkhotskL2, RadianceL2
+from spot.projection import ProjectionEQR, ProjectionEQR4Tile, PROJ_METHOD, INTERP_METHOD
 
 # =============================
 #  Function
@@ -50,95 +52,174 @@ class File:
         # Distinguish product type and generate a dedicated reader
         self.product_id = os.path.splitext(self.filename)[0][-10:-6]
         logging.debug(' * Product: {0}'.format(self.product_id))
-        if self.product_id == 'NWLR' or self.product_id == 'IWPR':
+        if self.product_id == 'VNRD' or self.product_id == 'VNRN':
+            self._reader = VNRL1B(self.h5_file, self.product_id)
+        elif self.product_id == 'IRSD' or self.product_id == 'IRSN':
+            self._reader = IRSL1B(self.h5_file, self.product_id)
+        elif self.product_id == 'NWLR' or self.product_id == 'IWPR' or self.product_id == 'SSTD' or \
+                self.product_id == 'SSTN':
             self._reader = OceanL2(self.h5_file, self.product_id)
         elif self.product_id == 'SIPR':
             self._reader = CryosphereL2(self.h5_file, self.product_id)
-        elif self.product_id == 'LAI_':
+        elif self.product_id == 'LAI_' or self.product_id == 'RSRF' or self.product_id == 'VGI_' or \
+                self.product_id == 'AGB_' or self.product_id == 'LST_':
             self._reader = LandL2(self.h5_file, self.product_id)
-        elif self.product_id == 'ARNP':
+        elif self.product_id == 'ARNP' or self.product_id == 'ARPL' or self.product_id == 'CLFG' or \
+                self.product_id == 'CLPR' :
             self._reader = AtmosphereL2(self.h5_file, self.product_id)
+        elif self.product_id == 'LTOA':
+            self._reader = RadianceL2(self.h5_file, self.product_id)
         else:
             warnings.warn('{0} is not yet supported!'.format(self.product_id), SpotWarnings, stacklevel=2)
             raise NotSupportedError('{0} is not yet supported!'.format(self.product_id))
 
+        # Initialize projection property
+        self._projector = None
+        self.original_projection_type = self._reader.PROJECTION_TYPE
+        self.projection_type = self.original_projection_type
+        self.corner_coordinate = None
+
         # Initialize cache spaces
         self.img_data_cache = {}
+        self.img_projected_data_cache = {}
         for key in self.get_product_list():
             self.img_data_cache[key] = None
+            self.img_projected_data_cache[key] = None
 
         self.geo_data_cache = {}
+        self.geo_projected_data_cache = {}
         for key in self.get_geometry_data_list():
             self.geo_data_cache[key] = None
+            self.geo_projected_data_cache[key] = None
 
     # -----------------------
     # Getter
     # -----------------------
-    def get_product(self, prod_name:str):
+    def get_product_data(self, prod_name: str, projection: str='auto'):
+        """
+
+        :param prod_name:
+        :param projection:
+            'auto': use default projection type
+            'original': return original data from product file
+        :return:
+        """
         # Check requested product name
         if prod_name not in self.img_data_cache.keys():
             warnings.warn('{0} not found on {1}'.format(prod_name, self.filepath), SpotWarnings, stacklevel=2)
             return None
 
+        # Detect projection type
+        if projection == 'auto':
+            tgt_proj_type = self.projection_type
+        elif projection == 'original':
+            tgt_proj_type = self.original_projection_type
+        else:
+            if projection not in self.get_allow_projection_type():
+                warnings.warn('\'{0}\' is not allowed as projection type!　(type: {1})'.format(
+                    projection, self.get_allow_projection_type()), SpotWarnings, stacklevel=2)
+                return None
+            tgt_proj_type = projection
+
         # Return cached data if cache has the requested data
-        if self.img_data_cache[prod_name] is not None:
-            logging.debug('Use cache: {0}'.format(prod_name))
+        if (tgt_proj_type == self.original_projection_type) and (self.img_data_cache[prod_name] is not None):
+            logging.debug('Use cache: {0} (original)'.format(prod_name))
             return self.img_data_cache[prod_name].copy()
+        elif (self.projection_type == tgt_proj_type) and (self.img_projected_data_cache[prod_name] is not None):
+            logging.debug('Use cache: {0} ({1})'.format(prod_name, tgt_proj_type))
+            return self.img_projected_data_cache[prod_name].copy()
 
-        # Get data
-        data = self._reader.get_product(prod_name)
+        # Get raw data
+        if self.img_data_cache[prod_name] is not None:
+            data = self.img_data_cache[prod_name].copy()
+        else:
+            data = self._reader.get_product_data(prod_name)
+            # Set the data into cache space
+            self.img_data_cache[prod_name] = data
+            logging.debug('Read: {0} (original)'.format(prod_name))
 
-        # Set the data into cache space
-        self.img_data_cache[prod_name] = data
+        # Project the requested type if the requested type is not original projection type
+        if (self.original_projection_type != tgt_proj_type) and (tgt_proj_type == self.projection_type):
+            data = self._projector.run(data, INTERP_METHOD.NEAREST_NEIGHBOR)
+            self.img_projected_data_cache[prod_name] = data
+            logging.debug('Read: {0} ({1})'.format(prod_name, tgt_proj_type))
+        elif (self.original_projection_type != tgt_proj_type) and (tgt_proj_type == PROJ_TYPE.EQR.name):
+            lat = self.get_geometry_data('Latitude', projection='original')
+            lon = self.get_geometry_data('Longitude', projection='original')
+            if self.original_projection_type == PROJ_TYPE.SCENE.name:
+                projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+            elif self.original_projection_type == PROJ_TYPE.TILE.name:
+                projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, vtile=self._reader.vtile, map_area=self._get_corner_latlon())
+            data = projector.run(data, INTERP_METHOD.NEAREST_NEIGHBOR)
+            logging.debug('Read: {0} ({1})'.format(prod_name, tgt_proj_type))
 
         return data.copy()
 
     def get_unit(self, prod_name:str):
         # Check requested product name
-        if prod_name not in self.img_data_cache.keys():
-            warnings.warn('{0} not found on {1}'.format(prod_name, self.filepath), SpotWarnings, stacklevel=2)
-            return None
+        if prod_name in self.img_data_cache.keys() or prod_name in self.geo_data_cache.keys():
+            return self._reader.get_unit(prod_name)
 
-        # Get attrs set
-        unit_name = 'Unit'
-        real_prod_name = prod_name
-        if 'Rrs' in prod_name:
-            real_prod_name = prod_name.replace('Rrs', 'NWLR')
-            unit_name = 'Rrs_unit'
-        attrs = self.h5_file['/Image_data/' + real_prod_name].attrs
+        warnings.warn('{0} not found on {1}'.format(prod_name, self.filepath), SpotWarnings, stacklevel=2)
+        return None
 
-        # Get unit
-        if unit_name not in attrs:
-            return ''
-        return attrs[unit_name][0].decode('UTF-8')
-
-    def get_flag(self, *args):
+    def get_flag(self, flags=[], projection: str='auto'):
         """
 
         :param args: int (0-15)
         :return: True is flagged pixel.
         """
         # Validation
-        if len(args) < 1:
+        if len(flags) < 1:
             warnings.warn('Argument is empty!', SpotWarnings, stacklevel=2)
             return None
-        for arg in args:
+        for arg in flags:
             if type(arg) is not int:
                 warnings.warn('Arguments allow only int type: {0}({1})'.format(arg, type(arg)), SpotWarnings, stacklevel=2)
                 return None
 
+        # Detect projection type
+        if projection == 'auto':
+            tgt_proj_type = self.projection_type
+        elif projection == 'original':
+            tgt_proj_type = self.original_projection_type
+        else:
+            if projection not in self.get_allow_projection_type():
+                warnings.warn('\'{0}\' is not allowed as projection type!　(type: {1})'.format(
+                    projection, self.get_allow_projection_type()), SpotWarnings, stacklevel=2)
+                return None
+            tgt_proj_type = projection
+
         # Get flags
-        flag_val = np.sum(np.power(2, np.array(args, dtype=np.uint32)))
-        flag_data = self.get_product('QA_flag')
+        flag_val = np.sum(np.power(2, np.array(flags, dtype=np.uint32)))
+        flag_data = self.get_product_data('QA_flag', 'original')
         flag_data = np.bitwise_and(flag_data, flag_val).astype(np.bool)
 
-        return flag_data
+        # project the requested type if the requested type is not original projection type
+        if (self.original_projection_type != tgt_proj_type) and (tgt_proj_type == self.projection_type):
+            flag_data = self._projector.run(flag_data, INTERP_METHOD.NEAREST_NEIGHBOR)
+            logging.debug('Read: {0} ({1})'.format('QA_flag', tgt_proj_type))
+        elif (self.original_projection_type != tgt_proj_type) and (tgt_proj_type == PROJ_TYPE.EQR.name):
+            lat = self.get_geometry_data('Latitude', projection='original')
+            lon = self.get_geometry_data('Longitude', projection='original')
+            if self.original_projection_type == PROJ_TYPE.SCENE.name:
+                projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+            elif self.original_projection_type == PROJ_TYPE.TILE.name:
+                projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, htile=self._reader.htile, map_area=self._get_corner_latlon())
+            flag_data = projector.run(flag_data, INTERP_METHOD.NEAREST_NEIGHBOR)
+            logging.debug('Read: {0} ({1})'.format('QA_flag', tgt_proj_type))
 
-    #def get_geometry_data(self, data_name:str, interval='auto', fit_img_size=True):
-    def get_geometry_data(self, data_name: str, **kwargs):
+        flag_data[np.isnan(flag_data)] = 0
+        return np.array(flag_data, dtype=np.bool)
+
+    def get_geometry_data(self, data_name: str, projection: str='auto', **kwargs):
         """
         :param data_name: a dataset name in Geometry data group
         Options:
+            :param projection:
+                'auto': use default projection type
+                'original': return original data from product file
+
             Level-2 scene product)
                 :param interval:
                     None or 'none: no interpolation (= source data size).
@@ -152,55 +233,95 @@ class File:
             warnings.warn('{0} not found on {1}'.format(data_name, self.filepath), SpotWarnings, stacklevel=2)
             return None
 
+        # Detect projection type
+        if projection == 'auto':
+            tgt_proj_type = self.projection_type
+        elif projection == 'original':
+            tgt_proj_type = self.original_projection_type
+        else:
+            if projection not in self.get_allow_projection_type():
+                warnings.warn('\'{0}\' is not allowed as projection type!　(type: {1})'.format(
+                    projection, self.get_allow_projection_type()), SpotWarnings, stacklevel=2)
+                return None
+            tgt_proj_type = projection
+
         # Parse keyword arguments:
-        if self._reader.projection_type == 'Scene':
+        if tgt_proj_type == PROJ_TYPE.SCENE.name or self.original_projection_type == PROJ_TYPE.SCENE.name:
             scene_args = {'interval': 'auto', 'fit_img_size': True}
-            for key in kwargs.keys():
-                if key == 'interval' or key == 'fit_img_size':
-                    scene_args[key] = kwargs[key]
+            if tgt_proj_type == PROJ_TYPE.SCENE.name:
+                for key in kwargs.keys():
+                    if key == 'interval' or key == 'fit_img_size':
+                        scene_args[key] = kwargs[key]
 
         # Return cached data if cache has the requested data
-        if self.geo_data_cache[data_name] is not None:
-            if (self._reader.projection_type == 'Scene') and (scene_args['interval'] == 'auto') and (scene_args['fit_img_size'] is True):
-                logging.debug('Use cache: {0}'.format(data_name))
+        if (tgt_proj_type == self.original_projection_type) and (self.geo_data_cache[data_name] is not None):
+            # Scene with auto interval and fitted image size
+            if (tgt_proj_type == PROJ_TYPE.SCENE.name) and (scene_args['interval'] == 'auto') and (scene_args['fit_img_size'] is True):
+                logging.debug('Use cache: {0} (original)'.format(data_name))
                 return self.geo_data_cache[data_name].copy()
-
-            if self._reader.projection_type == 'Tile':
-                logging.debug('Use cache: {0}'.format(data_name))
+            # Tile
+            elif tgt_proj_type == PROJ_TYPE.TILE.name:
+                logging.debug('Use cache: {0} (original)'.format(data_name))
                 return self.geo_data_cache[data_name].copy()
+        elif (self.projection_type == tgt_proj_type) and (self.geo_projected_data_cache[data_name] is not None):
+            logging.debug('Use cache: {0} ({1})'.format(data_name, tgt_proj_type))
+            return self.geo_projected_data_cache[data_name].copy()
 
         # Get raw data
-        req_data = None
-        if self._reader.projection_type == 'Scene':
+        if self.geo_data_cache[data_name] is not None:
+            data = self.geo_data_cache[data_name].copy()
+        elif self.original_projection_type == PROJ_TYPE.SCENE.name:
             data = self._reader.get_geometry_data(data_name, interval=scene_args['interval'], fit_img_size=scene_args['fit_img_size'])
-
             # Set the data into cache space
             (data_size_lin, data_size_pxl) = data.shape
             if (scene_args['fit_img_size'] is True) and (self._reader.img_n_lin <= data_size_lin) and (self._reader.img_n_pix <= data_size_pxl):
                 self.geo_data_cache[data_name] = data
-
-            req_data = data.copy()
-
-        elif self._reader.projection_type == 'Tile':
-            data = self._reader.get_geometry_data(data_name)
-
+            logging.debug('Read: {0} (original)'.format(data_name))
+        elif self.original_projection_type == PROJ_TYPE.TILE.name:
+            data = self._reader.get_geometry_data(data_name, interval='auto', fit_img_size=False)
             # Set the data into cache space
             self.geo_data_cache[data_name] = data
+            logging.debug('Read: {0} (original)'.format(data_name))
 
-            req_data = data.copy()
+        # Project the requested type if the requested type is not original projection type
+        if (self.original_projection_type != tgt_proj_type) and (tgt_proj_type == self.projection_type):
+            if data_name == 'Latitude':
+                data = self._projector.get_latitude()
+            elif data_name == 'Longitude':
+                data = self._projector.get_longitude()
+                data[data > 180] = data[data > 180] - 360
+            else:
+                data = self._projector.run(data, INTERP_METHOD.NEAREST_NEIGHBOR)
 
-        return req_data
+            self.geo_projected_data_cache[data_name] = data
+            logging.debug('Read: {0} ({1})'.format(data_name, tgt_proj_type))
+
+        elif (self.original_projection_type != tgt_proj_type) and (tgt_proj_type == PROJ_TYPE.EQR.name):
+            lat = self.get_geometry_data('Latitude', projection='original')
+            lon = self.get_geometry_data('Longitude', projection='original')
+            if self.original_projection_type == PROJ_TYPE.SCENE.name:
+                projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+            elif self.original_projection_type == PROJ_TYPE.TILE.name:
+                projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, h=self._reader.htile, map_area=self._get_corner_latlon())
+
+            if data_name == 'Latitude':
+                data = projector.get_latitude()
+            elif data_name == 'Longitude':
+                data = projector.get_longitude()
+            else:
+                data = projector.run(data, INTERP_METHOD.NEAREST_NEIGHBOR)
+            logging.debug('Read: {0} ({1})'.format(data_name, tgt_proj_type))
+
+        return data.copy()
 
     def get_product_list(self):
-        # ret = list(self.h5_file['/Image_data'].keys())
-        # if self.product_id == 'NWLR':
-        #     ret = ret + ['Rrs_380', 'Rrs_412', 'Rrs_443', 'Rrs_490', 'Rrs_530', 'Rrs_565', 'Rrs_670']
-        #
-        # return ret
         return self._reader.get_product_list()
 
     def get_geometry_data_list(self):
         return self._reader.get_geometry_data_list()
+
+    def get_projection_type(self):
+        return self.projection_type
 
     # -----------------------
     # Search methods
@@ -229,12 +350,80 @@ class File:
     #     pass
 
     # -----------------------
+    # Projection methods
+    # -----------------------
+    def get_allow_projection_type(self):
+        return self._reader.get_allow_projection_type()
+
+    def get_current_projection_type(self):
+        return self.projection_type
+
+    def set_projection_type(self, projection: str):
+        if self.projection_type == projection:
+            return True
+
+        if projection not in self.get_allow_projection_type():
+            warnings.warn('\'{0}\' is not allowed as projection type!　(type: {1})'.format(
+                projection, self.get_allow_projection_type()), SpotWarnings, stacklevel=2)
+            return False
+
+        self.clean_projection_cache()
+
+        if projection == self.original_projection_type:
+            self.projection_type = self.original_projection_type
+            self._projector = None
+            return True
+
+        elif (projection == PROJ_TYPE.EQR.name) and (self.original_projection_type == PROJ_TYPE.SCENE.name):
+            lat = self.get_geometry_data('Latitude', projection='original')
+            lon = self.get_geometry_data('Longitude', projection='original')
+            self._projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+            self.projection_type = self._projector.PROJECTION_NAME
+        elif (projection == PROJ_TYPE.EQR.name) and (self.original_projection_type == PROJ_TYPE.TILE.name):
+            lat = self.get_geometry_data('Latitude', projection='original')
+            lon = self.get_geometry_data('Longitude', projection='original')
+            self._projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, htile=self._reader.htile, map_area=self._get_corner_latlon())
+            self.projection_type = self._projector.PROJECTION_NAME
+
+    def _get_corner_latlon(self):
+        if self.corner_coordinate is None:
+            lat = self.get_geometry_data('Latitude', projection='original')
+            lon = self.get_geometry_data('Longitude', projection='original')
+            positive_lon = np.mod(lon, 360)
+            lon_range = np.array([np.nanmin(positive_lon), np.nanmax(positive_lon)], dtype=np.float32)
+            lon_range[lon_range > 180] = lon_range[lon_range > 180] - 360
+            self.corner_coordinate = [*lon_range, np.nanmax(lat), np.nanmin(lat)]
+
+        return self.corner_coordinate
+
+    # -----------------------
     # File utility
     # -----------------------
     def close(self):
         if self.h5_file is not None:
             logging.debug('Close: {0}'.format(self.filepath))
             self.h5_file.close()
+
+    # -----------------------
+    # Cache utility
+    # -----------------------
+    def clean_cache(self):
+        for key in self.img_data_cache.keys():
+            self.img_data_cache[key] = None
+
+        for key in self.geo_data_cache.keys():
+            self.geo_data_cache[key] = None
+
+    def clean_projection_cache(self):
+        for key in self.img_data_cache.keys():
+            self.img_projected_data_cache[key] = None
+
+        for key in self.geo_data_cache.keys():
+            self.geo_projected_data_cache[key] = None
+
+    def clean_all_cache(self):
+        self.clean_cache()
+        self.clean_projection_cache()
 
     # +++++++++++++++++++++++
     # Private methods
