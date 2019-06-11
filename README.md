@@ -27,7 +27,7 @@ chla_data = iwpr_data.get_product_data('CHLA')
 spot.saveimg(iwpr_data, outpath='hoge.png')
 ```
 
-For more detail on usage, please see the wiki.
+For more detail, please see [the wiki](https://github.com/K0gata/SGLI_Python_Open_Tool/wiki).
 
 ## Installation
 Installation on the current version provides manually only. 
@@ -35,7 +35,7 @@ Installation on the current version provides manually only.
 
 1. Download  
     * Git: `$ git clone git@github.com:K0gata/SGLI_Python_Opne_Tool.git`  
-    * Web: [Download (zip file)](https://github.com/K0gata/SGLI_Python_Opne_Tool/archive/master.zip)
+    * Web: [Download (zip file)](https://github.com/K0gata/SGLI_Python_Open_Tool/archive/master.zipp)
 2. Import the SPOT module on your script
 
 ```python
@@ -56,7 +56,7 @@ for **[JAXA Standard Products](https://suzaku.eorc.jaxa.jp/GCOM_C/data/product_s
 |  Product | Status   | Remark |
 |:--------:|:--------:|:---------:|
 |  L1B VNR | Completed | - |
-|  L1B IRS | Testing   | - |
+|  L1B IRS | Working   | - |
 |  L1B POL | Waiting   | - |
 
 
@@ -102,7 +102,7 @@ Waiting (Not supported)
 * Level-3  
 *Waiting (Not supported)
 
-for **JAXA/EORC JASMES Semi-Realtime Data** (NetCDF4 format):  
+for **[JAXA/EORC JASMES Semi-Realtime Data](https://www.eorc.jaxa.jp/cgi-bin/jasmes/sgli_nrt/index.cgi)** (NetCDF4 format):  
 Waiting (Not supported)
 
 ## Future Update Plan
