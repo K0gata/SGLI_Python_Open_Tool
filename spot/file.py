@@ -82,7 +82,7 @@ class File:
         # Initialize cache spaces
         self.img_data_cache = {}
         self.img_projected_data_cache = {}
-        for key in self.get_product_list():
+        for key in self.get_product_data_list():
             self.img_data_cache[key] = None
             self.img_projected_data_cache[key] = None
 
@@ -314,8 +314,8 @@ class File:
 
         return data.copy()
 
-    def get_product_list(self):
-        return self._reader.get_product_list()
+    def get_product_data_list(self):
+        return self._reader.get_product_data_list()
 
     def get_geometry_data_list(self):
         return self._reader.get_geometry_data_list()
@@ -393,7 +393,6 @@ class File:
             lon_range = np.array([np.nanmin(positive_lon), np.nanmax(positive_lon)], dtype=np.float32)
             lon_range[lon_range > 180] = lon_range[lon_range > 180] - 360
             self.corner_coordinate = [*lon_range, np.nanmax(lat), np.nanmin(lat)]
-
         return self.corner_coordinate
 
     # -----------------------

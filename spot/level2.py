@@ -99,13 +99,13 @@ class L2Interface(ABC):
     def get_geometry_data_list(self):
         raise NotImplementedError()
 
-    def get_product_list(self):
+    def get_product_data_list(self):
         return list(self.h5_file['/Image_data'].keys())
 
     def get_unit(self, prod_name: str):
         # Get attrs set
         unit_name = 'Unit'
-        if prod_name in self.get_product_list():
+        if prod_name in self.get_product_data_list():
             grp_name = '/Image_data/'
         else:
             grp_name = '/Geometry_data/'
@@ -229,8 +229,8 @@ class RadianceL2(Tile):
         return super().get_product_data(prod_name)
 
 
-    def get_product_list(self):
-        prod_list = super().get_product_list()
+    def get_product_data_list(self):
+        prod_list = super().get_product_data_list()
         for prod in prod_list:
             if ('Lt_P' in prod) or ('Lt_S' in prod) or ('Lt_V' in prod):
                 prod_list.append(prod.replace('Lt', 'Rt'))
@@ -329,8 +329,8 @@ class OceanL2(Scene):
 
         return data
 
-    def get_product_list(self):
-        prod_list = super().get_product_list()
+    def get_product_data_list(self):
+        prod_list = super().get_product_data_list()
         if self.product_id == 'NWLR':
             prod_list = prod_list + ['Rrs_380', 'Rrs_412', 'Rrs_443', 'Rrs_490', 'Rrs_530', 'Rrs_565', 'Rrs_670']
 

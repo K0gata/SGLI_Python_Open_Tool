@@ -64,7 +64,7 @@ class L1Interface(ABC):
     def get_geometry_data_list(self):
         raise NotImplementedError()
 
-    def get_product_list(self):
+    def get_product_data_list(self):
         return list(self.h5_file['/Image_data'].keys())
 
     def get_unit(self, prod_name: str):
@@ -218,8 +218,8 @@ class L1B(Scene):
 
 class VNRL1B(L1B):
 
-    def get_product_list(self):
-        prod_list = super().get_product_list()
+    def get_product_data_list(self):
+        prod_list = super().get_product_data_list()
         for prod in prod_list:
             if 'Lt_' in prod:
                 prod_list.append(prod.replace('Lt', 'Rt'))
@@ -231,8 +231,8 @@ class VNRL1B(L1B):
 
 class IRSL1B(L1B):
 
-    def get_product_list(self):
-        prod_list = super().get_product_list()
+    def get_product_data_list(self):
+        prod_list = super().get_product_data_list()
         for prod in prod_list:
             if 'Lt_SW' in prod:
                 prod_list.append(prod.replace('Lt', 'Rt'))
