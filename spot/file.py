@@ -147,9 +147,9 @@ class File:
             lat = self.get_geometry_data('Latitude', projection='original')
             lon = self.get_geometry_data('Longitude', projection='original')
             if self.original_projection_type == PROJ_TYPE.SCENE.name:
-                projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+                projector = ProjectionEQR(lat, lon, spatial_resolution=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
             elif self.original_projection_type == PROJ_TYPE.TILE.name:
-                projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, vtile=self._reader.vtile, map_area=self._get_corner_latlon())
+                projector = ProjectionEQR4Tile(lat, lon, spatial_resolution=self._reader.img_spatial_reso, vtile=self._reader.vtile, map_area=self._get_corner_latlon())
             data = projector.run(data, INTERP_METHOD.NEAREST_NEIGHBOR)
             logging.debug('Read: {0} ({1})'.format(prod_name, tgt_proj_type))
 
@@ -203,9 +203,9 @@ class File:
             lat = self.get_geometry_data('Latitude', projection='original')
             lon = self.get_geometry_data('Longitude', projection='original')
             if self.original_projection_type == PROJ_TYPE.SCENE.name:
-                projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+                projector = ProjectionEQR(lat, lon, spatial_resolution=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
             elif self.original_projection_type == PROJ_TYPE.TILE.name:
-                projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, htile=self._reader.htile, map_area=self._get_corner_latlon())
+                projector = ProjectionEQR4Tile(lat, lon, spatial_resolution=self._reader.img_spatial_reso, htile=self._reader.htile, map_area=self._get_corner_latlon())
             flag_data = projector.run(flag_data, INTERP_METHOD.NEAREST_NEIGHBOR)
             logging.debug('Read: {0} ({1})'.format('QA_flag', tgt_proj_type))
 
@@ -300,9 +300,9 @@ class File:
             lat = self.get_geometry_data('Latitude', projection='original')
             lon = self.get_geometry_data('Longitude', projection='original')
             if self.original_projection_type == PROJ_TYPE.SCENE.name:
-                projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+                projector = ProjectionEQR(lat, lon, spatial_resolution=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
             elif self.original_projection_type == PROJ_TYPE.TILE.name:
-                projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, h=self._reader.htile, map_area=self._get_corner_latlon())
+                projector = ProjectionEQR4Tile(lat, lon, spatial_resolution=self._reader.img_spatial_reso, h=self._reader.htile, map_area=self._get_corner_latlon())
 
             if data_name == 'Latitude':
                 data = projector.get_latitude()
@@ -358,7 +358,7 @@ class File:
     def get_current_projection_type(self):
         return self.projection_type
 
-    def set_projection_type(self, projection: str):
+    def set_projection_type(self, projection: str, quality='L', spatial_resolution: float=None, map_area=None):
         if self.projection_type == projection:
             return True
 
@@ -369,20 +369,27 @@ class File:
 
         self.clean_projection_cache()
 
+        if spatial_resolution == None:
+            spatial_resolution = self._reader.img_spatial_reso
+
+        source_map_area = self._get_corner_latlon()
+        trim_map_area = None
+        if map_area is not None:
+            trim_map_area = map_area
+
         if projection == self.original_projection_type:
             self.projection_type = self.original_projection_type
             self._projector = None
             return True
-
         elif (projection == PROJ_TYPE.EQR.name) and (self.original_projection_type == PROJ_TYPE.SCENE.name):
             lat = self.get_geometry_data('Latitude', projection='original')
             lon = self.get_geometry_data('Longitude', projection='original')
-            self._projector = ProjectionEQR(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, map_area=self._get_corner_latlon())
+            self._projector = ProjectionEQR(lat, lon, spatial_resolution=spatial_resolution, map_area=source_map_area, trim_map_area=trim_map_area, quality=quality)
             self.projection_type = self._projector.PROJECTION_NAME
         elif (projection == PROJ_TYPE.EQR.name) and (self.original_projection_type == PROJ_TYPE.TILE.name):
             lat = self.get_geometry_data('Latitude', projection='original')
             lon = self.get_geometry_data('Longitude', projection='original')
-            self._projector = ProjectionEQR4Tile(lat, lon, spatial_reso_m=self._reader.img_spatial_reso, htile=self._reader.htile, map_area=self._get_corner_latlon())
+            self._projector = ProjectionEQR4Tile(lat, lon, spatial_resolution=spatial_resolution, htile=self._reader.htile, map_area=source_map_area, trim_map_area=trim_map_area, quality=quality)
             self.projection_type = self._projector.PROJECTION_NAME
 
     def _get_corner_latlon(self):

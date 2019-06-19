@@ -13,7 +13,7 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
             cbar: bool=True, cbar_label: str=None,
             mask :np.ndarray=None,
             axes=True, xlabel :str=None, ylabel :str=None,  title :str=None,
-            grid :bool=None, grid_interval=None):
+            grid :bool=False, grid_interval=None):
 
     # =====================
     # Config
@@ -25,7 +25,7 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
     lines, pixels = data.shape[:2]
     geo_mode = False
 
-    # =====================
+    # =====================c
     # Validation
     # =====================
     if (lat is not None) and (lon is not None):
@@ -50,8 +50,10 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
     if clim is not None:
         min_plot_val = clim[0]
         max_plot_val = clim[1]
-        img_data[img_data < min_plot_val] = min_plot_val
-        img_data[img_data > max_plot_val] = max_plot_val
+        with np.warnings.catch_warnings():
+            np.warnings.filterwarnings(r'ignore', 'invalid value encountered in (less|greater)')
+            img_data[img_data < min_plot_val] = min_plot_val
+            img_data[img_data > max_plot_val] = max_plot_val
     if log10 is True:
         with np.warnings.catch_warnings():
             np.warnings.filterwarnings('ignore', 'invalid value encountered in less_equal')
@@ -65,6 +67,9 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
     if cbar is True:
         figsize = (figsize[0], figsize[1] + 0.7)
         y0 = y0 + dpi * 0.7
+    if axes is False and title is not None:
+        figsize = (figsize[0], figsize[1] + 0.3)
+
 
     fig = plt.figure(dpi=dpi)
     fig.set_size_inches(figsize[0], figsize[1])
@@ -78,13 +83,9 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
         # cmap = get_cmap_Scat()
 
     if geo_mode is True:
-        if grid is None:
-            grid = True
         if grid_interval is None:
             grid_interval = 3
     else:
-        if grid is None:
-            grid = False
         if grid_interval is None:
             grid_interval = 200
 
@@ -109,13 +110,11 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
     # =====================
     # Draw axes
     # =====================
+    ax = None
     if axes is True:
         ax = plt.axes([int(rect[0]) / fig_w_pxls, int(rect[2]) / fig_h_pxls, (im_size_w + 2) / fig_w_pxls,
                        (im_size_h + 2) / fig_h_pxls])
         ax.patch.set_alpha(0)
-
-        if title is not None:
-            ax.set_title(title, size=9)
 
         if geo_mode is False:
             # set label and etc.
@@ -138,6 +137,11 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
                 ax.grid(color='gray', linestyle='--', linewidth=0.5)
 
         if geo_mode is True:
+            if xlabel is None:
+                xlabel = 'Longitude [degree]'
+            if ylabel is None:
+                ylabel = 'Latitude [degree]'
+
             lon = lon.copy()
             lat = lat.copy()
             if (lon[0,0] > lon[0,-1]) or (lon[-1,0] > lon[-1,-1]):
@@ -159,7 +163,7 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
             ax.contour(lat, origin='image', levels=lat_grid, colors='gray', linestyles='--', linewidths=0.5, alpha=alpha)
 
             # Draw labels and ticks
-            ax.set_xlabel('Longitude [degree]', size=12)
+            ax.set_xlabel(xlabel, size=12)
             lon_tick_pos = np.interp(lon_grid, x_coordinate, np.arange(0, len(x_coordinate)), left=np.NaN, right=np.NaN)
             lon_tick_labels = lon_grid[~np.isnan(lon_tick_pos)]
             lon_tick_pos = lon_tick_pos[~np.isnan(lon_tick_pos)]
@@ -168,7 +172,7 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
             lon_tick_labels = map(lambda e: '{0}°E'.format(e) if e >= 0 else '{0}°W'.format(e*-1), lon_tick_labels)
             ax.set_xticklabels(lon_tick_labels, ha="center")
 
-            ax.set_ylabel('Latitude [degree]', size=12)
+            ax.set_ylabel(ylabel, size=12)
             lat_tick_pos = np.interp(lat_grid, y_coordinate, np.arange(0, len(y_coordinate)), left=np.NaN, right=np.NaN)
             lat_tick_labels = lat_grid[~np.isnan(lat_tick_pos)]
             lat_tick_pos = lat_tick_pos[~np.isnan(lat_tick_pos)]
@@ -177,10 +181,19 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
             ax.set_yticklabels(lat_tick_labels, rotation=90, va="center")
 
     # =====================
+    # Draw title
+    # =====================
+    if title is not None:
+        if ax is not None:
+            ax.set_title(title, size=9)
+        else:
+            fig.text(0.5, (im_size_h + 10 + int(rect[2])) / fig_h_pxls, title, fontsize=9, horizontalalignment='center', verticalalignment='bottom')
+
+    # =====================
     # Draw color-bar
     # =====================
     if cbar is True:
-        cax = plt.axes([(int(rect[0])/fig_w_pxls)+0.01, 150/fig_h_pxls, (im_size_w/fig_w_pxls)-0.02, 50/fig_h_pxls])
+        cax = plt.axes([(int(rect[0])/fig_w_pxls)+0.05, 150/fig_h_pxls, (im_size_w/fig_w_pxls)-0.1, 50/fig_h_pxls])
         cax.tick_params(labelsize=10)
 
         if img_data.dtype != np.bool:

@@ -57,7 +57,7 @@ for **[JAXA Standard Products](https://suzaku.eorc.jaxa.jp/GCOM_C/data/product_s
 |:--------:|:--------:|:---------:|
 |  L1B VNR | Completed | - |
 |  L1B IRS | Working   | SW1, SW2 and SW4 on 250m and 500m spatial resolutions are not yet supported. |
-|  L1B POL | Waiting   | - |
+|  L1B POL | Waiting   | Not supported |
 
 
 * Level-2 Ocean
