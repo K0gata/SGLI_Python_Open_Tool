@@ -343,7 +343,11 @@ class OceanL2(Scene):
         if 'Rrs' in prod_name:
             real_prod_name = prod_name.replace('Rrs', 'NWLR')
             unit_name = 'Rrs_unit'
-        attrs = self.h5_file['/Image_data/' + real_prod_name].attrs
+
+        if real_prod_name in self.get_product_data_list():
+            attrs = self.h5_file['/Image_data/' + real_prod_name].attrs
+        elif real_prod_name in self.get_geometry_data_list():
+            attrs = self.h5_file['/Geometry_data/' + real_prod_name].attrs
 
         # Get unit
         if unit_name not in attrs:

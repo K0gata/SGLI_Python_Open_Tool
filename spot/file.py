@@ -9,7 +9,7 @@ import time
 from spot.config import SpotWarnings, TZ_UTC0, PROJ_TYPE
 from spot.level1 import VNRL1B, IRSL1B
 from spot.level2 import OceanL2, LandL2, AtmosphereL2, CryosphereL2, CryosphereOkhotskL2, RadianceL2
-from spot.projection import ProjectionEQR, ProjectionEQR4Tile, PROJ_METHOD, INTERP_METHOD
+from spot.projection import ProjectionEQR, ProjectionEQR4Tile, PROJ_METHOD, INTERP_METHOD, SPATILA_RESOLUTION_UNIT, PROJ_QUALITY
 
 # =============================
 #  Function
@@ -358,7 +358,7 @@ class File:
     def get_current_projection_type(self):
         return self.projection_type
 
-    def set_projection_type(self, projection: str, quality='L', spatial_resolution: float=None, map_area=None):
+    def set_projection_type(self, projection: str, quality='L', spatial_resolution: float=None, spatial_resolution_unit=None, map_area=None):
         if self.projection_type == projection:
             return True
 
@@ -369,13 +369,16 @@ class File:
 
         self.clean_projection_cache()
 
-        if spatial_resolution == None:
+        if spatial_resolution is None:
             spatial_resolution = self._reader.img_spatial_reso
 
-        source_map_area = self._get_corner_latlon()
-        trim_map_area = None
-        if map_area is not None:
-            trim_map_area = map_area
+        if spatial_resolution_unit is None or spatial_resolution_unit == 'm':
+            spatial_resolution_unit = SPATILA_RESOLUTION_UNIT.METER
+        elif spatial_resolution_unit == 'd':
+            spatial_resolution_unit = SPATILA_RESOLUTION_UNIT.DEGREE
+
+        if type(map_area).__name__ == 'list':
+            map_area = np.array(map_area, dtype=np.float64)
 
         if projection == self.original_projection_type:
             self.projection_type = self.original_projection_type
@@ -384,7 +387,13 @@ class File:
         elif (projection == PROJ_TYPE.EQR.name) and (self.original_projection_type == PROJ_TYPE.SCENE.name):
             lat = self.get_geometry_data('Latitude', projection='original')
             lon = self.get_geometry_data('Longitude', projection='original')
-            self._projector = ProjectionEQR(lat, lon, spatial_resolution=spatial_resolution, map_area=source_map_area, trim_map_area=trim_map_area, quality=quality)
+
+            #self._projector = ProjectionEQR(lat, lon, spatial_resolution=spatial_resolution, map_area=source_map_area, trim_map_area=trim_map_area, quality=quality)
+            self._projector = ProjectionEQR(lat, lon,
+                                            spatial_resolution=spatial_resolution, spatial_resolution_unit=spatial_resolution_unit,
+                                            projection_method=PROJ_METHOD.PSEUDO_AFFINE, quality=PROJ_QUALITY.LOW, interpolation_method=INTERP_METHOD.NEAREST_NEIGHBOR,
+                                            draw_map_area=map_area)
+
             self.projection_type = self._projector.PROJECTION_NAME
         elif (projection == PROJ_TYPE.EQR.name) and (self.original_projection_type == PROJ_TYPE.TILE.name):
             lat = self.get_geometry_data('Latitude', projection='original')

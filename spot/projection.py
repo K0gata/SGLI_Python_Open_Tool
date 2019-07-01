@@ -4,6 +4,8 @@ import enum
 import logging
 from abc import ABC, abstractmethod, abstractproperty
 from decimal import Decimal, ROUND_HALF_UP
+import matplotlib.pyplot as plt
+
 
 class PROJ_TYPE(enum.Enum):
     SCENE = enum.auto()
@@ -12,9 +14,13 @@ class PROJ_TYPE(enum.Enum):
 
 
 class PROJ_METHOD(enum.Enum):
-    PSEUDO_AFINE = enum.auto()
+    PSEUDO_AFFINE = enum.auto()
     POLY_3DIM = enum.auto()
 
+class PROJ_QUALITY(enum.Enum):
+    HIGH = enum.auto()
+    MODERATE = enum.auto()
+    LOW = enum.auto()
 
 class INTERP_METHOD(enum.Enum):
     NEAREST_NEIGHBOR = enum.auto()
@@ -32,11 +38,17 @@ class ProjectionEQR(Projection):
     """
     EQuiRectangular projection
     """
+    # ----------------------------
+    # Class attribute
+    # ----------------------------
+    #
+    # WIDTH_KM = 40000
+    # HIGHT_KM = 20000
     # WGS84
     WIDTH_KM = 40075.01668558
     HIGHT_KM = 40007.86193085 / 2
-    # WIDTH_KM = 40000
-    # HIGHT_KM = 20000
+    METER_PER_LON = WIDTH_KM * 1000. / 360.
+    METER_PER_LAT = HIGHT_KM * 1000. / 180.
 
     PROJECTION_TYPE = PROJ_TYPE.EQR
     PROJECTION_NAME = PROJ_TYPE.EQR.name
@@ -44,131 +56,193 @@ class ProjectionEQR(Projection):
     # ----------------------------
     # Public
     # ----------------------------
-    def __init__(self, lat: np.ndarray, lon: np.ndarray, spatial_resolution: float, spatial_resolution_unit: SPATILA_RESOLUTION_UNIT=SPATILA_RESOLUTION_UNIT.METER, map_area=None, trim_map_area=None, quality='L', method: PROJ_METHOD=PROJ_METHOD.PSEUDO_AFINE):
+    def _set_projecting_coordinates(self, lat, lon, draw_map_area):
+        self.num_glb_w_pxls = int(360. / self.spatial_resolution_deg)
+        self.num_glb_h_pxls = int(180. / self.spatial_resolution_deg) + 1
+        self.source_map_area = self._get_EQR_geo_rect(lat, lon)
+        if draw_map_area is None:
+            draw_map_area = self.source_map_area
+        if draw_map_area[3] < draw_map_area[2]:
+            draw_map_area[3] = 360. + draw_map_area[3]
+
+        # Calculate a projecting position
+        rel_draw_map_area = np.concatenate((((draw_map_area[0:2] - 90.) / -180.), (draw_map_area[2:] + 180.) / 360.))
+        draw_pxl_rect = np.array([self.num_glb_h_pxls, self.num_glb_h_pxls, self.num_glb_w_pxls, self.num_glb_w_pxls]) * rel_draw_map_area
+        draw_pxl_rect = [int(draw_pxl_rect[0]), math.ceil(draw_pxl_rect[1]), int(draw_pxl_rect[2]), math.ceil(draw_pxl_rect[3])]
+        draw_deg_rect = np.array([*self.EQR_y_pos2lat(draw_pxl_rect[0:2]), *self.EQR_x_pos2lon(draw_pxl_rect[2:])])
+
+        # When the same start and end point on the longitude.
+        if (draw_map_area[2] == draw_map_area[3]) or ((draw_map_area[2] == -180.) and (draw_map_area[3] == 180.)):
+            if draw_pxl_rect[2] >= self.num_glb_w_pxls:
+                draw_pxl_rect[2] = draw_pxl_rect[2] % self.num_glb_w_pxls
+            draw_pxl_rect[3] = draw_pxl_rect[2] + self.num_glb_w_pxls - 1
+            draw_deg_rect[3] = self.EQR_x_pos2lon(draw_pxl_rect[3])
+
+        # Set the parameters
+        self.proj_height = draw_pxl_rect[1] - draw_pxl_rect[0] + 1
+        self.proj_width = draw_pxl_rect[3] - draw_pxl_rect[2] + 1
+        self.y_offset = draw_pxl_rect[0]
+        self.x_offset = draw_pxl_rect[2]
+        self.draw_deg_rect = draw_deg_rect
+        self.draw_pxl_rect = draw_pxl_rect
+        self.draw_map_area = draw_map_area
+
+    def __init__(self, lat: np.ndarray, lon: np.ndarray,
+                 spatial_resolution: float, spatial_resolution_unit: SPATILA_RESOLUTION_UNIT=SPATILA_RESOLUTION_UNIT.METER,
+                 projection_method: PROJ_METHOD=PROJ_METHOD.PSEUDO_AFFINE, quality=PROJ_QUALITY.LOW, interpolation_method=INTERP_METHOD.NEAREST_NEIGHBOR,
+                 draw_map_area: np.ndarray=None):
+        """
+        :param lat: (required)
+        :param lon: (required)
+        :param spatial_resolution: (required)
+        :param spatial_resolution_unit: (required)
+        :param projection_method: (optional, default: PROJ_METHOD.PSEUDO_AFINE)
+        :param quality: (optional, default: PROJ_QUALITY.LOW)
+        :param interpolation_method: (optional, default: INTERP_METHOD.NEAREST_NEIGHBOR)
+        :param draw_map_area: (optional, default: inputted lat/lon ranges)
         """
 
-        :param lat:
-        :param lon:
-        :param spatial_resolution:
-        :param spatial_resolution_unit:
-        :param map_area:
-        :param quality:
-        :param method:
-        """
         logging.debug('Initialize {0}'.format(self.__class__.__name__))
 
-        # Define EQR map parameters according to user setting
-        self.spatial_resolution_unit = spatial_resolution_unit
+        # ===========================
+        # Define EQR-map parameters
+        # ===========================
+        # Set spatial resolution
+        self.spatial_resolution_deg = spatial_resolution
         if spatial_resolution_unit == SPATILA_RESOLUTION_UNIT.METER:
-            self.spatial_reso_km = spatial_resolution / 1000.
-            self.num_glb_w_pxls = int(self.WIDTH_KM / self.spatial_reso_km)
-            self.num_glb_h_pxls = int(self.HIGHT_KM / self.spatial_reso_km)
-        elif spatial_resolution_unit == SPATILA_RESOLUTION_UNIT.DEGREE:
-            self.num_glb_w_pxls = int(360. / spatial_resolution)
-            self.num_glb_h_pxls = int(180. / spatial_resolution)
-            self.spatial_reso_km = self.WIDTH_KM / self.num_glb_w_pxls
+            logging.debug('  * Spatial resolution on the equator (m): {0} m'.format(spatial_resolution))
+            self.spatial_resolution_deg = self.spatial_resolution_deg / self.METER_PER_LON
+        self.source_spatial_resolution = spatial_resolution
+        self.source_spatial_resolution_unit = spatial_resolution_unit
+        logging.debug('  * Spatial resolution (deg): {0} deg.'.format(self.spatial_resolution_deg))
 
-        # debug!
-        if map_area is None:
-            self.per_area = [0, 1, 0, 1]
-        elif abs(map_area[0] - map_area[1]) > 180:
-            map_area = np.array(map_area, dtype=np.float64)
-            map_area[0:2] = np.sort(np.mod(map_area[0:2], 360))
-            self.per_area = np.concatenate(((map_area[0:2] + 180.) / 360., (map_area[2:] - 90.) / -180.))
-        else:
-            map_area = np.array(map_area, dtype=np.float64)
-            self.per_area = np.concatenate(((map_area[0:2] + 180.) / 360., (map_area[2:] - 90.) / -180.))
+        # Calculate projecting coordinates
+        self._set_projecting_coordinates(lat, lon, draw_map_area)
 
-        self.tgt_pxl_rect = np.array([self.num_glb_w_pxls, self.num_glb_w_pxls, self.num_glb_h_pxls, self.num_glb_h_pxls]) * self.per_area
-        self.tgt_pxl_rect = [int(self.tgt_pxl_rect[0]), math.ceil(self.tgt_pxl_rect[1]), int(self.tgt_pxl_rect[2]), math.ceil(self.tgt_pxl_rect[3])]
-        self.tgt_deg_rect = np.array([*self.EQR_x_pos2lon(self.tgt_pxl_rect[0:2]), *self.EQR_y_pos2lat(self.tgt_pxl_rect[2:])])
+        logging.debug('  * Target projecting area [upper lat., lower lat., left lon., right lon.]: {0}'.format(self.draw_map_area))
+        logging.debug('  * Output projecting area [deg], [pxl]: {0}, {1}'.format(self.draw_deg_rect, self.draw_pxl_rect))
+        logging.debug('  * Projecting image size: h={0} lines, w={1} pixels'.format(self.proj_height, self.proj_width))
 
-        self.proj_width = self.tgt_pxl_rect[1] - self.tgt_pxl_rect[0] + 1
-        self.proj_height = self.tgt_pxl_rect[3] - self.tgt_pxl_rect[2] + 1
-        self.x_offset = self.tgt_pxl_rect[0]
-        self.y_offset = self.tgt_pxl_rect[2]
+        # ===========================
+        # Set flags and pre-processing
+        # ===========================
+        # if self.draw_map_area[2] == self.draw_map_area[3]:
+        #     self._set_projecting_coordinates(lat, lon, np.array([*self.draw_map_area[:3], self.draw_map_area[3] + 360.], dtype=np.float64))
+        #
+        # if self.proj_width < 0:
+        #     self._set_projecting_coordinates(lat, lon, np.array([*self.draw_map_area[:3], 360. + self.draw_map_area[3]], dtype=np.float64))
 
-        logging.debug('  * Requested aera: {0}'.format(map_area))
-        if spatial_resolution_unit == SPATILA_RESOLUTION_UNIT.METER:
-            logging.debug('  * Spatial resolution: {0} km'.format(self.spatial_reso_km))
-        elif spatial_resolution_unit == SPATILA_RESOLUTION_UNIT.DEGREE:
-            logging.debug('  * Spatial resolution: {0} Degree'.format(spatial_resolution))
-        logging.debug('  * Loc. of rect [West, East, North, South]: Deg. {0} <=> EQR pxl pos. {1}'.format(self.tgt_deg_rect, self.tgt_pxl_rect))
-        logging.debug('  * Width: {0}, Height: {1}'.format(self.proj_width, self.proj_height))
-        logging.debug('  * Projection Quality: {0}'.format(quality))
+        source_pxl_rect_lon = self.EQR_lon2x_pos(self.source_map_area[2:])
+        # self.is_split_source = True if (source_pxl_rect_lon[0] > source_pxl_rect_lon[-1]) else False
+        self.is_split_source = True if (source_pxl_rect_lon[0] < self.draw_pxl_rect[2]) else False
+        if self.is_split_source:
+            logging.debug('  * Input data is divided by output position')
+            self._set_projecting_coordinates(lat, lon, np.array([*self.draw_map_area[:2], *self.source_map_area[2:]], dtype=np.float64))
 
-        # cal. index for projection map
+        # self.is_stride_over_180_lon = True if (self.draw_map_area[3] > 180.) else False
+        # if self.is_stride_over_180_lon:
+        #     lon[lon < 0] = 360. + lon[lon < 0]
+        #     logging.debug('  * Projecting data is stride over +/-180 degree on the longitude.')
+
+        if self.draw_map_area[3] > 180:
+            lon[lon < 0] = 360. + lon[lon < 0]
+            logging.debug('  * Projecting data is stride over +/-180 degree on the longitude.')
+
+        # ===========================
+        # Run Forward transformation
+        # ===========================
+        logging.debug('  * Run forward transformation')
+
+        # Run
+        source_y_idx_eqr = self.EQR_lat2y_pos(lat)
+        source_x_idx_eqr = self.EQR_lon2x_pos(lon)
+
+        # Drop the outer range of the projection
+        proj_outer_area = (source_y_idx_eqr < self.draw_pxl_rect[0]) | (source_y_idx_eqr > self.draw_pxl_rect[1]) |\
+                          (source_x_idx_eqr < self.draw_pxl_rect[2]) | (source_x_idx_eqr > self.draw_pxl_rect[3])
+
+        source_y_idx_eqr[proj_outer_area] = np.NaN
+        source_x_idx_eqr[proj_outer_area] = np.NaN
+        source_y_idx_eqr = source_y_idx_eqr - self.y_offset
+        source_x_idx_eqr = source_x_idx_eqr - self.x_offset
+
+        # ===========================
+        # Run backward transformation
+        # ===========================
+        logging.debug('  * Run backward transformation')
+        logging.debug('    * Projection method: {0}'.format(projection_method.name))
+        logging.debug('    * Projection quality: {0}'.format(quality.name))
+
+        # Set calculating granularity of backward transformation
+        granularity = 25 # PROJ_QUALITY.MODERATE
+        if quality == PROJ_QUALITY.LOW:
+            granularity = 50
+        elif quality == PROJ_QUALITY.HIGH:
+            granularity = 10
+
+        # Set projection methods
+        if projection_method == PROJ_METHOD.PSEUDO_AFFINE:
+            selected_cal_coef_method = getattr(self, '_cal_coef_for_pseudo_affine_trans')
+            selected_projection_method = getattr(self, '_pseudo_affine_trans')
+
+        # Allocate positional arrays for projecting image
         pos_x_img = np.zeros((self.proj_height, self.proj_width), dtype=np.float32) * np.NaN
         pos_y_img = np.zeros((self.proj_height, self.proj_width), dtype=np.float32) * np.NaN
 
-        lon = np.mod(lon, 360)
-        x_idx_eqr = self.EQR_lon2x_pos(lon) - self.x_offset
-        y_idx_eqr = self.EQR_lat2y_pos(lat) - self.y_offset
+        # Generate index arrays for source data
+        (source_h, source_w) = lat.shape
+        (source_x_idx, source_y_idx) = np.meshgrid(np.arange(0, source_w), np.arange(0, source_h))
 
-        (h, w) = lat.shape
-        (x_idx_l1b, y_idx_l1b) = np.meshgrid(np.arange(0, w), np.arange(0, h))
-        # x_idx_l1b = x_idx_l1b
-        # y_idx_l1b = y_idx_l1b
-        granularity = 25 # quality == 'H'
-        if quality == 'L':
-            granularity = 50
-        elif quality == 'H':
-            granularity = 10
-        #
-        # if spatial_reso_m == 250.:
-        #     granularity = granularity * 4
+        # logging.info('{0} {1} {2} '.format(granularity, int(source_h/granularity), int(source_w / granularity)))
 
-        logging.debug('  * Proj. method: {0}'.format(method.name))
-        if method == PROJ_METHOD.PSEUDO_AFINE:
-            for h_x_idx_eqr, h_y_idx_eqr, h_x_idx_l1b, h_y_idx_l1b in zip(
-                    np.array_split(x_idx_eqr, int(h/granularity), axis=0), np.array_split(y_idx_eqr, int(h/granularity), axis=0),
-                    np.array_split(x_idx_l1b, int(h/granularity), axis=0), np.array_split(y_idx_l1b, int(h/granularity), axis=0)):
-                for tgt_x_idx_eqr, tgt_y_idx_eqr, tgt_x_idx_l1b, tgt_y_idx_l1b in zip(
-                        np.array_split(h_x_idx_eqr, int(w / granularity), axis=1), np.array_split(h_y_idx_eqr, int(w / granularity), axis=1),
-                        np.array_split(h_x_idx_l1b, int(w / granularity), axis=1), np.array_split(h_y_idx_l1b, int(w / granularity), axis=1)):
-                    (eqr2scene_coef_x, eqr2scene_coef_y) = self._cal_EQR2Scene_coef_for_pseudo_afine_trans(tgt_x_idx_eqr, tgt_y_idx_eqr, tgt_x_idx_l1b, tgt_y_idx_l1b)
+        # Run backward transformation
+        for h_x_idx_eqr, h_y_idx_eqr, h_x_idx, h_y_idx, h_proj_outer_area in zip(
+                np.array_split(source_x_idx_eqr, int(source_h/granularity), axis=0), np.array_split(source_y_idx_eqr, int(source_h/granularity), axis=0),
+                np.array_split(source_x_idx, int(source_h/granularity), axis=0), np.array_split(source_y_idx, int(source_h/granularity), axis=0),
+                np.array_split(proj_outer_area, int(source_h/granularity), axis=0)):
 
-                    # subset
-                    x_range = [int(np.nanmin(tgt_x_idx_eqr)), int(np.ceil(np.nanmax(tgt_x_idx_eqr))) + 1]
-                    y_range = [int(np.nanmin(tgt_y_idx_eqr)), int(np.ceil(np.nanmax(tgt_y_idx_eqr))) + 1]
-                    (x_idx_ret, y_idx_ret) = np.meshgrid(np.arange(*x_range), np.arange(*y_range))
-                    pos_x_img[y_idx_ret, x_idx_ret] = self._pseudo_afine_trans(eqr2scene_coef_x, x_idx_ret.astype(np.float64), y_idx_ret.astype(np.float64))
-                    pos_y_img[y_idx_ret, x_idx_ret] = self._pseudo_afine_trans(eqr2scene_coef_y, x_idx_ret.astype(np.float64), y_idx_ret.astype(np.float64))
+            # Skip this block because it was all composed of outer data.
+            if h_proj_outer_area.all():
+                continue
 
-        elif method == PROJ_METHOD.POLY_3DIM:
-            raise NotImplementedError()
+            for tgt_x_idx_eqr, tgt_y_idx_eqr, tgt_x_idx, tgt_y_idx, tgt_proj_outer_area in zip(
+                    np.array_split(h_x_idx_eqr, int(source_w / granularity), axis=1), np.array_split(h_y_idx_eqr, int(source_w / granularity), axis=1),
+                    np.array_split(h_x_idx, int(source_w / granularity), axis=1), np.array_split(h_y_idx, int(source_w / granularity), axis=1),
+                    np.array_split(h_proj_outer_area, int(source_w / granularity), axis=1)):
 
-        if trim_map_area is not None:
-            if abs(trim_map_area[0] - trim_map_area[1]) > 180:
-                trim_map_area = np.array(trim_map_area, dtype=np.float64)
-                trim_map_area[0:2] = np.sort(np.mod(trim_map_area[0:2], 360))
-                trim_per_area = np.concatenate(((trim_map_area[0:2] + 180.) / 360., (trim_map_area[2:] - 90.) / -180.))
-            else:
-                trim_map_area = np.array(trim_map_area, dtype=np.float64)
-                trim_per_area = np.concatenate(((trim_map_area[0:2] + 180.) / 360., (trim_map_area[2:] - 90.) / -180.))
-            trim_pxl_rect = np.array([self.num_glb_w_pxls, self.num_glb_w_pxls, self.num_glb_h_pxls, self.num_glb_h_pxls]) * trim_per_area
-            trim_pxl_rect = [int(trim_pxl_rect[0]), math.ceil(trim_pxl_rect[1]), int(trim_pxl_rect[2]), math.ceil(trim_pxl_rect[3])]
-            trim_deg_rect = np.array([*self.EQR_x_pos2lon(trim_pxl_rect[0:2]), *self.EQR_y_pos2lat(trim_pxl_rect[2:])])
-            trim_proj_width = trim_pxl_rect[1] - trim_pxl_rect[0] + 1
-            trim_proj_height = trim_pxl_rect[3] - trim_pxl_rect[2] + 1
-            trim_x_offset = trim_pxl_rect[0]
-            trim_y_offset = trim_pxl_rect[2]
+                # Skip this block because it was all composed of outer data.
+                if tgt_proj_outer_area.all():
+                    continue
 
-            logging.debug('  * Trim area: {0}'.format(trim_map_area))
-            logging.debug('  * Trim per area: {0}'.format(trim_per_area))
-            logging.debug('  * Trim Loc. of rect [West, East, North, South]: Deg. {0} <=> EQR pxl pos. {1}'.format(trim_deg_rect, trim_pxl_rect))
-            logging.debug('  * Width: {0}, Height: {1}'.format(trim_proj_width, trim_proj_height))
+                # Calculate transformation matrices on x- and y-coordinates
+                (eqr2scene_coef_x, eqr2scene_coef_y) = selected_cal_coef_method(
+                    tgt_x_idx_eqr[~tgt_proj_outer_area], tgt_y_idx_eqr[~tgt_proj_outer_area],
+                    tgt_x_idx[~tgt_proj_outer_area], tgt_y_idx[~tgt_proj_outer_area])
+                x_range = [int(np.nanmin(tgt_x_idx_eqr)), int(np.ceil(np.nanmax(tgt_x_idx_eqr))) + 1]
+                y_range = [int(np.nanmin(tgt_y_idx_eqr)), int(np.ceil(np.nanmax(tgt_y_idx_eqr))) + 1]
+                (x_idx_ret, y_idx_ret) = np.meshgrid(np.arange(*x_range), np.arange(*y_range))
+                pos_x_img[y_idx_ret, x_idx_ret] = selected_projection_method(eqr2scene_coef_x, x_idx_ret.astype(np.float64), y_idx_ret.astype(np.float64))
+                pos_y_img[y_idx_ret, x_idx_ret] = selected_projection_method(eqr2scene_coef_y, x_idx_ret.astype(np.float64), y_idx_ret.astype(np.float64))
 
         # Trim index on out of image range
         with np.warnings.catch_warnings():
             np.warnings.filterwarnings('ignore', r'invalid value encountered in (greater|less)')
-            mask = np.where((pos_x_img < -0.5) | (pos_x_img > (w - 1)) | (pos_y_img < -0.5) | (pos_y_img > (h - 1)))
+            mask = np.where((pos_x_img < -0.5) | (pos_x_img > (source_w - 1)) | (pos_y_img < -0.5) | (pos_y_img > (source_h - 1)))
         pos_x_img[mask] = np.NaN
         pos_y_img[mask] = np.NaN
 
-        self.valid_index = np.where(~np.isnan(pos_y_img))
-        self.pos_x_img = pos_x_img[~np.isnan(pos_x_img)]
-        self.pos_y_img = pos_y_img[~np.isnan(pos_y_img)]
+        valid_idx_y, valid_idx_x = np.where(~np.isnan(pos_y_img))
+        # Shift x-position when the source data is divided.
+        if self.is_split_source is True:
+            valid_idx_x = valid_idx_x + self.x_offset
+            # Get the truth projection parameters
+            self._set_projecting_coordinates(lat, lon, draw_map_area)
+            valid_idx_x = (valid_idx_x - self.x_offset) % self.num_glb_w_pxls
+
+        inner_x_idx = np.where(valid_idx_x < self.proj_width)
+        self.valid_index = (valid_idx_y[inner_x_idx], valid_idx_x[inner_x_idx])
+        self.pos_x_img = pos_x_img[~np.isnan(pos_x_img)][inner_x_idx]
+        self.pos_y_img = pos_y_img[~np.isnan(pos_y_img)][inner_x_idx]
 
     def run(self, data: np.ndarray, interpolation: INTERP_METHOD=INTERP_METHOD.NEAREST_NEIGHBOR):
         """
@@ -181,28 +255,17 @@ class ProjectionEQR(Projection):
 
         # data[np.isnan(data)] = 999
         if interpolation == INTERP_METHOD.NEAREST_NEIGHBOR:
-            ret_img[self.valid_index] = data[(self.pos_y_img + 0.5).astype(np.int), (self.pos_x_img + 0.5).astype(np.int)]
+            y_pos = (self.pos_y_img + 0.5).astype(np.int)
+            x_pos = (self.pos_x_img + 0.5).astype(np.int)
+            # if self.is_split_source:
+                # valid_idx_x = self.valid_index[1]
+                # self.valid_index = (self.valid_index[0], valid_idx_x)
+                # x_pos[x_pos >= self.draw_pxl_rect[3]] = x_pos[x_pos >= self.draw_pxl_rect[3]] - self.draw_pxl_rect[3]
+            ret_img[self.valid_index] = data[y_pos, x_pos]
         elif interpolation == INTERP_METHOD.BILINIEAR:
             raise NotImplementedError()
 
         return ret_img
-
-
-    def _cal_EQR2Scene_coef_for_pseudo_afine_trans(self, tgt_x_idx_eqr: np.ndarray, tgt_y_idx_eqr: np.ndarray, tgt_x_idx_scene: np.ndarray, tgt_y_idx_scene: np.ndarray):
-        x_eqr = tgt_x_idx_eqr.flatten()
-        y_eqr = tgt_y_idx_eqr.flatten()
-        x_scene = tgt_x_idx_scene.flatten()
-        y_scene = tgt_y_idx_scene.flatten()
-
-        a = np.array([x_eqr * y_eqr, x_eqr, y_eqr, np.ones(y_eqr.shape)]).T
-        coef_x = np.linalg.solve(a.T @ a, a.T @ x_scene)
-        coef_y = np.linalg.solve(a.T @ a, a.T @ y_scene)
-
-        return coef_x, coef_y
-
-
-    def _pseudo_afine_trans(self, params, x, y):
-        return params[0] * y * x + params[1] * x + params[2] * y + params[3]
 
     def EQR_x_pos2lon(self, x_pos):
         return (np.array(x_pos, dtype=np.float64) / self.num_glb_w_pxls) * 360. - 180.
@@ -217,13 +280,13 @@ class ProjectionEQR(Projection):
         return ((np.array(lat, dtype=np.float64) - 90.) / -180.) * self.num_glb_h_pxls
 
     def get_latitude(self):
-        y_indexes = np.arange(self.tgt_pxl_rect[2], self.tgt_pxl_rect[3]+1).reshape(-1, 1)
+        y_indexes = np.arange(self.draw_pxl_rect[0], self.draw_pxl_rect[1]+1).reshape(-1, 1)
         y_indexes = np.tile(y_indexes, (1, self.proj_width))
 
         return self.EQR_y_pos2lat(y_indexes)
 
     def get_longitude(self):
-        x_indexes = np.arange(self.tgt_pxl_rect[0], self.tgt_pxl_rect[1]+1).reshape(1, -1)
+        x_indexes = np.arange(self.draw_pxl_rect[2], self.draw_pxl_rect[3]+1).reshape(1, -1)
         x_indexes = np.tile(x_indexes, (self.proj_height, 1))
 
         return self.EQR_x_pos2lon(x_indexes)
@@ -231,9 +294,43 @@ class ProjectionEQR(Projection):
     # ----------------------------
     # Private
     # ----------------------------
+    def _get_EQR_geo_rect(self, lat, lon, over_180lon=False):
+        """
+        :param lat: latitude [deg.]
+        :param lon: longitude [deg.]
+        :return: [upper_lat lower_lat, left_lon, right_lon] (The Longitude ranges from -180 to 180 degrees)
+        """
+        left_lon = np.nanmin(lon)
+        right_lon = np.nanmax(lon)
+        if (left_lon - right_lon) < -180.:
+            positive_lon = np.mod(lon, 360)
+            lon_range = np.array([np.nanmin(positive_lon), np.nanmax(positive_lon)], dtype=np.float32)
+            if over_180lon is False:
+                lon_range[lon_range > 180] = lon_range[lon_range > 180] - 360
+            (left_lon, right_lon) = lon_range
+        rect = [np.nanmax(lat), np.nanmin(lat), left_lon, right_lon]
+
+        return np.array(rect, np.float64)
+
+    # Pseudo affine translation
+    def _pseudo_affine_trans(self, params, x, y):
+        return params[0] * y * x + params[1] * x + params[2] * y + params[3]
+
+    def _cal_coef_for_pseudo_affine_trans(self, tgt_x_idx_eqr: np.ndarray, tgt_y_idx_eqr: np.ndarray, tgt_x_idx_scene: np.ndarray, tgt_y_idx_scene: np.ndarray):
+        x_eqr = tgt_x_idx_eqr.flatten()
+        y_eqr = tgt_y_idx_eqr.flatten()
+        x_scene = tgt_x_idx_scene.flatten()
+        y_scene = tgt_y_idx_scene.flatten()
+
+        a = np.array([x_eqr * y_eqr, x_eqr, y_eqr, np.ones(y_eqr.shape)]).T
+        coef_x = np.linalg.solve(a.T @ a, a.T @ x_scene)
+        coef_y = np.linalg.solve(a.T @ a, a.T @ y_scene)
+
+        return coef_x, coef_y
+
 
 class ProjectionEQR4Tile(ProjectionEQR):
-    def __init__(self, lat: np.ndarray, lon: np.ndarray, spatial_resolution: float,  htile: int, spatial_resolution_unit: SPATILA_RESOLUTION_UNIT=SPATILA_RESOLUTION_UNIT.METER, map_area=None, quality='L', method: PROJ_METHOD=PROJ_METHOD.PSEUDO_AFINE):
+    def __init__(self, lat: np.ndarray, lon: np.ndarray, spatial_resolution: float,  htile: int, spatial_resolution_unit: SPATILA_RESOLUTION_UNIT=SPATILA_RESOLUTION_UNIT.METER, map_area=None, quality='L', method: PROJ_METHOD=PROJ_METHOD.PSEUDO_AFFINE):
         self._cal_intermediate_data(lat, lon, htile)
 
         super().__init__(self.intermediate_lat, self.intermediate_lon, spatial_resolution=spatial_resolution, spatial_resolution_unit=spatial_resolution_unit, map_area=map_area, quality=quality, method=method)

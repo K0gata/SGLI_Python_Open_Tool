@@ -4,7 +4,7 @@ import matplotlib.colors as mat_colrs
 import numpy as np
 import math
 import warnings
-
+import logging
 from spot.config import SpotWarnings
 
 
@@ -58,6 +58,9 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
         with np.warnings.catch_warnings():
             np.warnings.filterwarnings('ignore', 'invalid value encountered in less_equal')
             img_data[img_data <= 0] = np.NaN
+        if np.isnan(img_data).all():
+            logging.warning('log10 mode has been canceled because the input data was all composed of invalid values (NaN, negative')
+            log10 = False
 
     figsize = ((pixels / dpi), (lines / dpi))
     if axes is True:
@@ -146,36 +149,51 @@ def saveimg(data: np.ndarray, lat: np.ndarray=None, lon: np.ndarray=None, outpat
             lat = lat.copy()
             if (lon[0,0] > lon[0,-1]) or (lon[-1,0] > lon[-1,-1]):
                 lon[lon < 0] = 360. + lon[lon < 0]
-            x_coordinate = lon[-1]
-            y_coordinate = lat[::-1, 0]
 
-            # Deaw grid lines
+            # Daw x-grid lines
             alpha = 1 if (grid is True) else 0
             lon_grid_min = math.floor(np.nanmin(lon))
             lon_grid_max = math.ceil(np.nanmax(lon))
             lon_grid = np.arange(lon_grid_min, lon_grid_max, grid_interval)
             if lon_grid[-1] + grid_interval == lon_grid_max:
                 lon_grid = np.concatenate((lon_grid, [lon_grid_max]))
-            ax.contour(lon, origin='image', levels=lon_grid, colors='gray', linestyles='--', linewidths=0.5, alpha=alpha)
-            lat_grid_min = math.floor(np.nanmin(lat))
-            lat_grid_max = math.ceil(np.nanmax(lat))
-            lat_grid = np.arange(lat_grid_min, lat_grid_max, grid_interval)
-            ax.contour(lat, origin='image', levels=lat_grid, colors='gray', linestyles='--', linewidths=0.5, alpha=alpha)
+            lon_con = ax.contour(lon, origin='image', levels=lon_grid, colors='gray', linestyles='--', linewidths=0.5, alpha=alpha)
 
-            # Draw labels and ticks
+            # Draw x-labels and ticks
             ax.set_xlabel(xlabel, size=12)
-            lon_tick_pos = np.interp(lon_grid, x_coordinate, np.arange(0, len(x_coordinate)), left=np.NaN, right=np.NaN)
-            lon_tick_labels = lon_grid[~np.isnan(lon_tick_pos)]
-            lon_tick_pos = lon_tick_pos[~np.isnan(lon_tick_pos)]
+            lon_tick_pos = []
+            lon_tick_labels = []
+            for level, polygon in zip(lon_con.levels, lon_con.allsegs):
+                if len(polygon) < 1:
+                    continue
+                if polygon[-1][:, 1][0] > 1:
+                    continue
+                lon_tick_labels.append(level)
+                lon_tick_pos.append(polygon[-1][:, 0][0])
             ax.set_xticks(lon_tick_pos)
             lon_tick_labels = map(lambda e: -360 + e if e > 180. else e, lon_tick_labels)
             lon_tick_labels = map(lambda e: '{0}°E'.format(e) if e >= 0 else '{0}°W'.format(e*-1), lon_tick_labels)
             ax.set_xticklabels(lon_tick_labels, ha="center")
 
+            # Daw y-grid lines
+            lat_grid_min = math.floor(np.nanmin(lat))
+            lat_grid_max = math.ceil(np.nanmax(lat))
+            lat_grid = np.arange(lat_grid_min, lat_grid_max, grid_interval)
+            if lat_grid[-1] + grid_interval == lat_grid_max:
+                lat_grid = np.concatenate((lat_grid, [lat_grid_max]))
+            lat_con = ax.contour(lat, origin='image', levels=lat_grid, colors='gray', linestyles='--', linewidths=0.5, alpha=alpha)
+
+            # Draw y-labels and ticks
             ax.set_ylabel(ylabel, size=12)
-            lat_tick_pos = np.interp(lat_grid, y_coordinate, np.arange(0, len(y_coordinate)), left=np.NaN, right=np.NaN)
-            lat_tick_labels = lat_grid[~np.isnan(lat_tick_pos)]
-            lat_tick_pos = lat_tick_pos[~np.isnan(lat_tick_pos)]
+            lat_tick_pos = []
+            lat_tick_labels = []
+            for level, polygon in zip(lat_con.levels, lat_con.allsegs):
+                if len(polygon) < 1:
+                    continue
+                if polygon[-1][-1][0] > 1:
+                    continue
+                lat_tick_labels.append(level)
+                lat_tick_pos.append(polygon[-1][-1][1])
             ax.set_yticks(lat_tick_pos)
             lat_tick_labels = map(lambda e: '{0}°N'.format(e) if e >= 0 else '{0}°S'.format(e*-1), lat_tick_labels)
             ax.set_yticklabels(lat_tick_labels, rotation=90, va="center")
